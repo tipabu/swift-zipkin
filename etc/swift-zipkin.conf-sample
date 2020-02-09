@@ -1,0 +1,6 @@
+[filter:zipkin]
+use = egg:swift_zipkin#zipkin
+zipkin_enable = true
+zipkin_v2_host = 192.168.22.1
+zipkin_v2_port = 9411
+zipkin_sampling_rate = 1
