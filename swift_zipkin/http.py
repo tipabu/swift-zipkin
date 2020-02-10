@@ -63,7 +63,9 @@ def _patched_begin(self):
     __org_begin__(self)
 
     if api.is_tracing():
-        api.get_tracer().get_span_ctx().stop()
+        span_ctx = api.get_tracer().get_span_ctx()
+        span_ctx.update_binary_annotations({"http.status_code": self.status})
+        span_ctx.stop()
 
 
 def patch():
