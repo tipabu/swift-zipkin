@@ -1,3 +1,41 @@
+# Copyright (c) 2020 SwiftStack, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+# implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Contains concepts originally found in Eventlet, covered by the MIT software
+# license.  The Eventlet license:
+#  Copyright (c) 2005-2006, Bob Ippolito
+#  Copyright (c) 2007-2010, Linden Research, Inc.
+#  Copyright (c) 2008-2010, Eventlet Contributors (see AUTHORS)
+#
+#  Permission is hereby granted, free of charge, to any person obtaining a copy
+#  of this software and associated documentation files (the "Software"), to deal
+#  in the Software without restriction, including without limitation the rights
+#  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+#  copies of the Software, and to permit persons to whom the Software is
+#  furnished to do so, subject to the following conditions:
+#
+#  The above copyright notice and this permission notice shall be included in
+#  all copies or substantial portions of the Software.
+#
+#  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+#  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+#  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+#  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+#  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+#  THE SOFTWARE.
 import os
 
 from eventlet import wsgi
@@ -10,7 +48,7 @@ __original_handle_one_response__ = wsgi.HttpProtocol.handle_one_response
 
 def _patched_handle_one_response(self):
     zipkin_attrs = api.extract_zipkin_attrs_from_headers(self.headers)
-    sample_rate = api.sampling_rate_pct
+    sample_rate = api.sample_rate_pct
     # A client can send just `X-B3-Sampled: 0` with no trace identifiers to
     # just say "don't trace".  In that case, we let new trace IDs get created
     # but we clamp the sample rate to 0% to honor the client's desire.

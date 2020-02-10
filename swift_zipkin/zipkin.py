@@ -84,7 +84,11 @@ Disable versioning from a container (x is any value except empty)::
 
 import os
 
-from swift.common.utils import get_logger, register_swift_info
+from swift.common.utils import (
+    get_logger, register_swift_info, config_true_value,
+    config_positive_int_value, config_float_value)
+
+from swift_zipkin.patcher import patch_eventlet_and_swift
 
 
 class ZipkinMiddleware(object):
@@ -92,17 +96,46 @@ class ZipkinMiddleware(object):
     def __init__(self, app, conf):
         self.app = app
         self.conf = conf
-        self.logger = get_logger(conf, log_route='zipkin')
+        self.logger = get_logger(conf, log_route='swift_zipkin')
+        self.enabled = config_true_value(conf.get('zipkin_enable'))
+        self.zipkin_v2_host = self.conf.get('zipkin_v2_host') or '127.0.0.1'
+        self.zipkin_v2_port = config_positive_int_value(
+            self.conf.get('zipkin_v2_port')) or 9411
+        raw_sample_rate = self.conf.get('zipkin_sample_rate')
+        if raw_sample_rate:
+            self.zipkin_sample_rate = config_float_value(raw_sample_rate,
+                                                         minimum=0.0,
+                                                         maximum=1.0)
+        else:
+            self.zipkin_sample_rate = 1.0
 
-        # This is where the magic happens!
+        if not self.enabled:
+            # It's not like we're going to get enabled between the first and
+            # second invocations of this constructor...
+            return
 
-        # Use our class to store a count of instantiations; I think we'll get
-        # instantiated some number of times prior to the forking off or workers
-        # (and hopefully at least once afterward...)
+        # Use our class to store a count of instantiations; We'll get
+        # one time before the forking off of workers, and again inside each
+        # worker.  We're interested in only doing our business post-fork,
+        # during the SECOND instantiation.
         setattr(self.__class__, '_instantiation_count',
                 1 + getattr(self.__class__, '_instantiation_count', 0))
-        self.logger('ZipkinMiddleware() count=%d PID=%d',
-                    self.__class__._instantiation_count, os.getpid())
+
+        if self.__class__._instantiation_count < 2:
+            self.logger.debug('ZipkinMiddleware() count=%d PID=%d; '
+                              'deferring work to 2nd instantiation.',
+                              self.__class__._instantiation_count, os.getpid())
+            return
+
+        self.logger.debug('ZipkinMiddleware() count=%d PID=%d; '
+                          'tracing %.0f%% of reqs to Zipkin at '
+                          '%s:%s',
+                          self.__class__._instantiation_count, os.getpid(),
+                          100.0 * self.zipkin_sample_rate,
+                          self.zipkin_v2_host, self.zipkin_v2_port)
+        patch_eventlet_and_swift(self.zipkin_v2_host,
+                                 self.zipkin_v2_port,
+                                 self.zipkin_sample_rate)
 
     def __call__(self, env, start_response):
         # This middleware doesn't actually do anything _in_ the pipeline.  It
