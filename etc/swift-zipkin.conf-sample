@@ -4,3 +4,5 @@ zipkin_enable = true
 zipkin_v2_host = 192.168.22.1
 zipkin_v2_port = 9411
 zipkin_sample_rate = 1
+zipkin_flush_threshold_size = 1048576
+zipkin_flush_threshold_sec = 2.0

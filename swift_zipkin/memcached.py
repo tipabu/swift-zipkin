@@ -108,7 +108,7 @@ def _set(self, key, value, serialize=True, time=0,
     for (server, fp, sock) in self._get_conns(key):
         with api.ezipkin_client_span(
             api.default_service_name(),
-            span_name='memcached.set',
+            span_name='set',
             binary_annotations={
                 "memcached.key": orig_key,
             },
@@ -140,7 +140,7 @@ def _get(self, key):
     for (server, fp, sock) in self._get_conns(key):
         with api.ezipkin_client_span(
             api.default_service_name(),
-            span_name='memcached.get',
+            span_name='get',
             binary_annotations={
                 "memcached.key": orig_key,
             },
@@ -199,9 +199,9 @@ def _incr(self, key, delta=1, time=0):
     delta = str(abs(int(delta))).encode('ascii')
     timeout = memcached.sanitize_timeout(time)
     if delta >= 0:
-        span_name = 'memcached.incr'
+        span_name = 'incr'
     else:
-        span_name = 'memcached.decr'
+        span_name = 'decr'
     for (server, fp, sock) in self._get_conns(key):
         with api.ezipkin_client_span(
             api.default_service_name(),
@@ -271,7 +271,7 @@ def _delete(self, key):
     for (server, fp, sock) in self._get_conns(key):
         with api.ezipkin_client_span(
             api.default_service_name(),
-            span_name='memcached.delete',
+            span_name='delete',
             binary_annotations={
                 "memcached.key": orig_key,
             },
@@ -324,9 +324,10 @@ def _set_multi(self, mapping, server_key, serialize=True, time=0,
     for (server, fp, sock) in self._get_conns(server_key):
         with api.ezipkin_client_span(
             api.default_service_name(),
-            span_name='memcached.set_multi',
+            span_name='set_multi',
             binary_annotations={
                 "memcached.key": orig_key,
+                "memcached.keys": ",".join(mapping),
             },
         ) as zipkin_span:
             add_remote_endpoint(zipkin_span, server)
@@ -352,14 +353,16 @@ def _get_multi(self, keys, server_key):
     :returns: list of values
     """
     orig_key = server_key
+    orig_keys = keys
     server_key = memcached.md5hash(server_key)
     keys = [memcached.md5hash(key) for key in keys]
     for (server, fp, sock) in self._get_conns(server_key):
         with api.ezipkin_client_span(
             api.default_service_name(),
-            span_name='memcached.get_multi',
+            span_name='get_multi',
             binary_annotations={
                 "memcached.key": orig_key,
+                "memcached.keys": ",".join(orig_keys),
             },
         ) as zipkin_span:
             add_remote_endpoint(zipkin_span, server)

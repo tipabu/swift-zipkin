@@ -108,6 +108,10 @@ class ZipkinMiddleware(object):
                                                          maximum=1.0)
         else:
             self.zipkin_sample_rate = 1.0
+        self.zipkin_flush_threshold_size = config_positive_int_value(
+            self.conf.get('zipkin_flush_threshold_size', 2**20))
+        self.zipkin_flush_threshold_sec = config_float_value(
+            self.conf.get('zipkin_flush_threshold_size', 2.0))
 
         if not self.enabled:
             # It's not like we're going to get enabled between the first and
@@ -133,9 +137,14 @@ class ZipkinMiddleware(object):
                           self.__class__._instantiation_count, os.getpid(),
                           100.0 * self.zipkin_sample_rate,
                           self.zipkin_v2_host, self.zipkin_v2_port)
-        patch_eventlet_and_swift(self.zipkin_v2_host,
-                                 self.zipkin_v2_port,
-                                 self.zipkin_sample_rate)
+        patch_eventlet_and_swift(
+            self.logger,
+            self.zipkin_v2_host,
+            self.zipkin_v2_port,
+            self.zipkin_sample_rate,
+            self.zipkin_flush_threshold_size,
+            self.zipkin_flush_threshold_sec,
+        )
 
     def __call__(self, env, start_response):
         # This middleware doesn't actually do anything _in_ the pipeline.  It
