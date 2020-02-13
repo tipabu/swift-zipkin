@@ -151,7 +151,7 @@ class GreenHttpTransport(py_zipkin.transport.BaseTransportHandler):
         if self.total_buffer_size > self.flush_threshold_size:
             self.do_flush()
 
-    def reschedule_flush_timer(self):
+    def reschedule_flush_timer(self, _gt=None):
         if self._timed_flush_gt:
             self._timed_flush_gt.wait()
         self._timed_flush_gt = eventlet.spawn_after(
