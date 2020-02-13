@@ -37,9 +37,8 @@
 #  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 #  THE SOFTWARE.
 import py_zipkin.storage
-import py_zipkin.transport
 
-from swift_zipkin import api, wsgi, http, greenthread, memcached
+from swift_zipkin import api, wsgi, http, greenthread, memcached, transport
 
 
 def patch_eventlet_and_swift(logger, zipkin_host='127.0.0.1', zipkin_port=9411,
@@ -70,7 +69,7 @@ def patch_eventlet_and_swift(logger, zipkin_host='127.0.0.1', zipkin_port=9411,
 
     # py_zipkin uses 0-100% for sample-rate, so convert here
     api.sample_rate_pct = sample_rate * 100.0
-    api.global_green_http_transport = api.GreenHttpTransport(
+    transport.GreenHttpTransport.init_singleton(
         logger, zipkin_host, zipkin_port, flush_size, flush_sec)
 
     wsgi.patch()
