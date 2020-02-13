@@ -43,6 +43,7 @@ from swift_zipkin import api
 
 __org_endheaders__ = httplib.HTTPConnection.endheaders
 __org_begin__ = httplib.HTTPResponse.begin
+__org_close__ = httplib.HTTPResponse.close
 
 
 def _patched_endheaders(self):
@@ -80,9 +81,21 @@ def _patched_begin(self):
     if api.is_tracing():
         span_ctx = api.get_tracer().get_span_ctx()
         span_ctx.update_binary_annotations({"http.status_code": self.status})
+        if self._method == 'HEAD':
+            span_ctx.stop()
+        else:
+            span_ctx.add_annotation('Response headers received')
+
+
+def _patched_close(self):
+    __org_close__(self)
+
+    if api.is_tracing() and self._method != 'HEAD':
+        span_ctx = api.get_tracer().get_span_ctx()
         span_ctx.stop()
 
 
 def patch():
     httplib.HTTPConnection.endheaders = _patched_endheaders
     httplib.HTTPResponse.begin = _patched_begin
+    httplib.HTTPResponse.close = _patched_close
