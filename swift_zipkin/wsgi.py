@@ -91,7 +91,7 @@ def _patched_handle_one_response(self):
     proxy_proto_client_ip, proxy_proto_client_port = getattr(
         self, 'client_address', (None, None))
     raw_peer_ip, raw_peer_port = self.request.getpeername()[:2]
-    forwarded_for = self.headers.getheader('X-Forwarded-For')
+    forwarded_for = self.headers.get('X-Forwarded-For')
     if proxy_proto_client_ip:
         # Try results of PROXY protocol first
         client_ip = proxy_proto_client_ip
@@ -115,7 +115,7 @@ def _patched_handle_one_response(self):
         binary_annotations=binary_annotations,
     ) as zipkin_span:
         zipkin_span.add_remote_endpoint(
-            client_port, self.headers.getheader('User-Agent'), client_ip)
+            client_port, self.headers.get('User-Agent'), client_ip)
         # Add in a hook to snarf out the response status
         self.environ['eventlet.posthooks'].append(
             (_extract_status_code, (zipkin_span,), {}),
