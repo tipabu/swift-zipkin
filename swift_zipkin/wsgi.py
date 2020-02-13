@@ -36,6 +36,7 @@
 #  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 #  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 #  THE SOFTWARE.
+import inspect
 import os
 
 from eventlet import wsgi
@@ -44,6 +45,20 @@ from swift_zipkin import api
 
 
 __original_handle_one_response__ = wsgi.HttpProtocol.handle_one_response
+
+
+def _extract_status_code(environ, zipkin_span):
+    # When we're called, the prior stack frame has a local var named
+    # "status_code" and we want to extract "status_code[0]" as http.status_code
+    # binary annotation.
+    frame = inspect.currentframe().f_back
+    try:
+        status_code = frame.f_locals['status_code'][0]
+        zipkin_span.update_binary_annotations({
+            'http.status_code': status_code,
+        })
+    finally:
+        del frame
 
 
 def _patched_handle_one_response(self):
@@ -101,6 +116,10 @@ def _patched_handle_one_response(self):
     ) as zipkin_span:
         zipkin_span.add_remote_endpoint(
             client_port, self.headers.getheader('User-Agent'), client_ip)
+        # Add in a hook to snarf out the response status
+        self.environ['eventlet.posthooks'].append(
+            (_extract_status_code, (zipkin_span,), {}),
+        )
 
         __original_handle_one_response__(self)
 
@@ -112,7 +131,7 @@ def _patched_handle_one_response(self):
         SWIFT_TRANS_ID_KEY = 'swift.trans_id'
         if not zipkin_span.zipkin_attrs.parent_span_id:
             if SWIFT_TRANS_ID_KEY in self.environ:
-                api.update_binary_annotations({
+                zipkin_span.update_binary_annotations({
                     SWIFT_TRANS_ID_KEY: self.environ[SWIFT_TRANS_ID_KEY],
                 })
 

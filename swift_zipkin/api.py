@@ -52,7 +52,15 @@ from py_zipkin.zipkin import (
     create_endpoint)
 
 # Convenience imports so other places don't have to import py_zipkin stuff
-from py_zipkin.zipkin import create_http_headers_for_new_span, ZipkinAttrs  # noqa
+from py_zipkin.zipkin import (
+    create_http_headers_for_new_span,
+    create_http_headers_for_this_span,
+    ZipkinAttrs,
+)
+# shut up linter
+create_http_headers_for_new_span = create_http_headers_for_new_span
+create_http_headers_for_this_span = create_http_headers_for_this_span
+ZipkinAttrs = ZipkinAttrs
 
 
 sample_rate_pct = 100
@@ -266,6 +274,8 @@ def extract_zipkin_attrs_from_headers(headers):
 
     Returns a ZipkinAttrs instance or None
     """
+    # Check our non-standard header first
+    is_shared = headers.get('X-B3-Shared', False) == '1'
     if 'b3' in headers:
         # b3={TraceId}-{SpanId}-{SamplingState}-{ParentSpanId}
         # where the last two fields are optional.
@@ -274,25 +284,23 @@ def extract_zipkin_attrs_from_headers(headers):
             return create_attrs_for_span(sample_rate=0.0,
                                          use_128bit_trace_id=True)
         return ZipkinAttrs(bits[0], bits[1], bits[3:4] or None,
-                           '0', bits[2:3] and bits[2] == '1')
+                           '0', bits[2:3] and bits[2] == '1',
+                           is_shared)
     trace_id = headers.get('X-B3-TraceId', None)
     span_id = headers.get('X-B3-SpanId', None)
     sampled = headers.get('X-B3-Sampled', None)
     # Must have either both trace_id & span_id OR sampled
     if ((trace_id and span_id) or sampled):
-        # ['trace_id', 'span_id', 'parent_span_id', 'flags', 'is_sampled']
+        # ['trace_id', 'span_id', 'parent_span_id', 'flags', 'is_sampled',
+        #  'is_shared']
         return ZipkinAttrs(
             trace_id,
             span_id,
             headers.get('X-B3-ParentSpanId', None),
             headers.get('X-B3-Flags', '0'),
-            sampled == '1')
+            sampled == '1',
+            is_shared)
 
 
 def default_service_name():
     return os.path.basename(sys.argv[0])
-
-
-def unpatch():
-    # TODO
-    pass

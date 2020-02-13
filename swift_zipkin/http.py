@@ -52,8 +52,23 @@ def _patched_endheaders(self):
             binary_annotations={'http.uri': self.path},
         )
         span_ctx.start()
-        span_ctx.add_remote_endpoint(host=self.host, port=self.port)
-        for h, v in api.create_http_headers_for_new_span().items():
+
+        remote_service_name = 'unknown'
+        try:
+            path_bits = self.path.split('/', 5)[1:]
+            if path_bits[0].startswith('d') and path_bits[0][1:].isdigit():
+                aco_bits = path_bits[2:]
+                if len(aco_bits) == 1:
+                    remote_service_name = 'account-server'
+                elif len(aco_bits) == 2:
+                    remote_service_name = 'container-server'
+                elif len(aco_bits) == 3:
+                    remote_service_name = 'object-server'
+        except Exception:
+            pass
+        span_ctx.add_remote_endpoint(host=self.host, port=self.port,
+                                     service_name=remote_service_name)
+        for h, v in api.create_http_headers_for_this_span().items():
             self.putheader(h, v)
 
     __org_endheaders__(self)
