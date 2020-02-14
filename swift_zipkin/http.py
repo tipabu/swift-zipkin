@@ -79,9 +79,13 @@ def _patched_begin(self):
     __org_begin__(self)
 
     if api.is_tracing():
-        self._zipkin_span = span_ctx = api.get_tracer().get_span_ctx()
+        span_ctx = api.get_tracer().get_span_ctx()
         span_ctx.update_binary_annotations({"http.status_code": self.status})
-        span_ctx.add_annotation('Response headers received')
+        if self._method == 'HEAD':
+            span_ctx.stop()
+        else:
+            self._zipkin_span = span_ctx
+            span_ctx.add_annotation('Response headers received')
 
 
 def _patched_close(self):
