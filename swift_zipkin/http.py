@@ -46,11 +46,23 @@ __org_begin__ = httplib.HTTPResponse.begin
 __org_close__ = httplib.HTTPResponse.close
 
 
+_span_contexts_by_fd = {}
+
+
 def _patched_endheaders(self):
     if api.is_tracing():
+        # Since we know this span is going out to a remote server (that's going
+        # to share our span_id), we don't need to nor want to associate any new
+        # spans on _this_ server as children of the span we're creating here.
+        # So we override the default pushing of the created span onto the
+        # tracer's stack with "do_context_push=False".
+        # NOTE: this also means our patched begin & close CANNOT use the normal
+        # api.get_tracer().get_span_ctx() trick because the created span isn't
+        # on the tracer's stack.  Hence the _span_contexts_by_fd storage.
         span_ctx = api.ezipkin_client_span(
             api.default_service_name(), span_name=self._method,
             binary_annotations={'http.uri': self.path},
+            do_context_push=False,
         )
         span_ctx.start()
 
@@ -69,23 +81,36 @@ def _patched_endheaders(self):
             pass
         span_ctx.add_remote_endpoint(host=self.host, port=self.port,
                                      service_name=remote_service_name)
-        for h, v in api.create_http_headers_for_this_span().items():
+        tmp_stack = api.Stack()
+        tmp_stack.push(span_ctx.zipkin_attrs)
+        b3_headers = api.create_http_headers_for_this_span(
+            context_stack=tmp_stack)
+        tmp_stack.pop()
+        for h, v in b3_headers.items():
             self.putheader(h, v)
 
     __org_endheaders__(self)
+
+    if api.is_tracing():
+        span_ctx._fd_key = self.sock.fileno()
+        _span_contexts_by_fd[span_ctx._fd_key] = span_ctx
 
 
 def _patched_begin(self):
     __org_begin__(self)
 
     if api.is_tracing():
-        span_ctx = api.get_tracer().get_span_ctx()
+        self._zipkin_span = span_ctx = \
+            _span_contexts_by_fd[self.fp.fileno()]
         span_ctx.update_binary_annotations({"http.status_code": self.status})
-        if self._method == 'HEAD':
-            span_ctx.stop()
-        else:
-            self._zipkin_span = span_ctx
-            span_ctx.add_annotation('Response headers received')
+        span_ctx.add_annotation('Response headers received')
+
+        # If we were a HEAD, go ahead and do the close here; should be safe if
+        # the client does it too since it's idempotent, I think.  There were
+        # definitely some cases where _no one_ called our self.close() and the
+        # span was left dangling.
+        if self._method == "HEAD":
+            self.close()
 
 
 def _patched_close(self):
@@ -94,6 +119,7 @@ def _patched_close(self):
     span_ctx = getattr(self, '_zipkin_span', None)
     if api.is_tracing() and span_ctx:
         span_ctx.stop()
+        del _span_contexts_by_fd[span_ctx._fd_key]
         del self._zipkin_span
 
 

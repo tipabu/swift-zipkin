@@ -44,7 +44,7 @@ requests = eventlet.import_patched('requests.__init__')
 
 from eventlet.green import threading
 
-import py_zipkin.storage
+from py_zipkin.storage import Tracer, Stack
 from py_zipkin.encoding import Encoding
 from py_zipkin.zipkin import (
     zipkin_span, zipkin_client_span, zipkin_server_span, create_attrs_for_span,
@@ -68,14 +68,14 @@ sample_rate_pct = 100
 _tls = threading.local()  # thread local storage for a SpanSavingTracer
 
 
-class SpanSavingTracer(py_zipkin.storage.Tracer):
+class SpanSavingTracer(Tracer):
     """
     Like py-zipkin's Tracer, but supports accessing the "current" zipkin span
     context object.
     """
     def __init__(self):
         super(SpanSavingTracer, self).__init__()
-        self._span_ctx_stack = py_zipkin.storage.Stack()
+        self._span_ctx_stack = Stack()
 
     def get_span_ctx(self):
         return self._span_ctx_stack.get()
@@ -130,16 +130,25 @@ class ezipkin_span(zipkin_span):
         kwargs.setdefault('transport_handler', transport.global_green_http_transport)
         kwargs.setdefault('use_128bit_trace_id', True)
         kwargs.setdefault('encoding', Encoding.V2_JSON)
+        self._do_context_push = kwargs.pop('do_context_push', True)
         super(ezipkin_span, self).__init__(*args, **kwargs)
 
     def start(self):
         # retval will be same as "self" but this feels a little cleaner
         retval = super(ezipkin_span, self).start()
-        if retval.do_pop_attrs:
+        if retval.do_pop_attrs and self._do_context_push:
             self.get_tracer().push_span_ctx(retval)
+        elif retval.do_pop_attrs:
+            # Parent class pushed context attrs we now need to pop
+            self.get_tracer().pop_zipkin_attrs()
+            # We also need to prevent parent class from trying to pop them back
+            # off because they won't be there:
+            self.do_pop_attrs = False
+
         return retval
 
     def stop(self, _exc_type=None, _exc_value=None, _exc_traceback=None):
+        # Any self._do_context_push was already accounted for in our start()
         if self.do_pop_attrs:
             self.get_tracer().pop_span_ctx()
         return super(ezipkin_span, self).stop(_exc_type=_exc_type,

@@ -43,6 +43,9 @@ from eventlet.green import threading
 
 from py_zipkin import transport
 
+# Shut up some pretty-verbose logging from requests' urllib3
+import logging
+logging.getLogger("requests.packages.urllib3").setLevel(logging.WARNING)
 
 _tls = threading.local()  # thread local storage for GreenHttpTransport
 global_green_http_transport = None
@@ -67,7 +70,10 @@ class GreenHttpTransport(transport.BaseTransportHandler):
         self.flush_threshold_sec = flush_threshold_sec
         self.payload_buffer = []
         self.total_buffer_size = 0
-        self._timed_flush_gt = None
+        self._flush_timer_started = None
+        # This flag will allow us to log POST errors only when we hadn't had an
+        # error before
+        self._in_error_state = None
 
     @classmethod
     def init_singleton(cls, logger, address, port, flush_threshold_size=2**20,
@@ -81,21 +87,20 @@ class GreenHttpTransport(transport.BaseTransportHandler):
         return None
 
     def send(self, payload):
-        if not self._timed_flush_gt:
+        if not self._flush_timer_started:
             self.reschedule_flush_timer()
+            self._flush_timer_started = True
 
         self.payload_buffer.append(payload)
         self.total_buffer_size += len(payload)
         if self.total_buffer_size > self.flush_threshold_size:
             self.do_flush()
 
-    def reschedule_flush_timer(self, _gt=None):
-        if self._timed_flush_gt:
-            self._timed_flush_gt.wait()
-        self._timed_flush_gt = eventlet.spawn_after(
+    def reschedule_flush_timer(self, gt=None):
+        eventlet.spawn_after(
             self.flush_threshold_sec,
-            self.do_flush)
-        self._timed_flush_gt.link(self.reschedule_flush_timer)
+            self.do_flush,
+        ).link(self.reschedule_flush_timer)
 
     def do_flush(self):
         if not self.payload_buffer:
@@ -115,11 +120,19 @@ class GreenHttpTransport(transport.BaseTransportHandler):
         ) + ']'
         buffer_switch_event.send()
         flush_size = len(_tls.flush_buffer)
-        resp = self.session.post(self.url, data=_tls.flush_buffer)
-        del _tls.flush_buffer
         try:
+            resp = self.session.post(self.url, data=_tls.flush_buffer)
             resp.raise_for_status()
+            if self._in_error_state is None or self._in_error_state:
+                self.logger.info("GreenHttpTransport: successfully POST'ed %d "
+                                 "byte Zipkin V2 JSON payload to %s",
+                                 flush_size, self.url)
+            self._in_error_state = False
         except Exception as e:
-            self.logger.debug(
-                'Error flushing %d bytes to %s: %r',
-                flush_size, self.url, e)
+            if not self._in_error_state:
+                self.logger.warning("GreenHttpTransport: error flushing "
+                                    "%d bytes to %s: %r",
+                                    flush_size, self.url, e)
+                self._in_error_state = True
+        finally:
+            del _tls.flush_buffer
