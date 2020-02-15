@@ -100,7 +100,7 @@ class ZipkinMiddleware(object):
         self.enabled = config_true_value(conf.get('zipkin_enable'))
         self.zipkin_v2_host = self.conf.get('zipkin_v2_host') or '127.0.0.1'
         self.zipkin_v2_port = config_positive_int_value(
-            self.conf.get('zipkin_v2_port')) or 9411
+            self.conf.get('zipkin_v2_port', 9411))
         raw_sample_rate = self.conf.get('zipkin_sample_rate')
         if raw_sample_rate:
             self.zipkin_sample_rate = config_float_value(raw_sample_rate,
