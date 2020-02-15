@@ -111,7 +111,7 @@ class ZipkinMiddleware(object):
         self.zipkin_flush_threshold_size = config_positive_int_value(
             self.conf.get('zipkin_flush_threshold_size', 2**20))
         self.zipkin_flush_threshold_sec = config_float_value(
-            self.conf.get('zipkin_flush_threshold_size', 2.0))
+            self.conf.get('zipkin_flush_threshold_sec', 2.0))
 
         if not self.enabled:
             # It's not like we're going to get enabled between the first and
