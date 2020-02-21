@@ -46,6 +46,11 @@ __org_begin__ = httplib.HTTPResponse.begin
 __org_close__ = httplib.HTTPResponse.close
 
 
+# stores [span_ctx, should_close_span_in_HTTPConnection.close_flag] pairs
+# if the 2nd element, the flag, is True, then we didn't exit
+# HTTPResponse.begin(), so we timed out, and a call to HTTPConnection.close()
+# should close our span stored by fd.  When begin() exits, it'll clear that
+# flag so the span doesn't close early..
 _span_contexts_by_fd = {}
 
 
@@ -80,7 +85,9 @@ def _patched_endheaders(self):
 
     if api.has_default_tracer():
         span_ctx._fd_key = self.sock.fileno()
-        _span_contexts_by_fd[span_ctx._fd_key] = span_ctx
+        # stores [span_ctx, should_close_span_in_HTTPConnection.close_flag]
+        # pairs:
+        _span_contexts_by_fd[span_ctx._fd_key] = [span_ctx, True]
 
 
 def _patched_begin(self):
@@ -88,7 +95,7 @@ def _patched_begin(self):
 
     if api.has_default_tracer():
         self._zipkin_span = span_ctx = \
-            _span_contexts_by_fd[self.fp.fileno()]
+            _span_contexts_by_fd[self.fp.fileno()][0]
         span_ctx.update_binary_annotations({"http.status_code": self.status})
         span_ctx.add_annotation('Response headers received')
 
@@ -98,9 +105,13 @@ def _patched_begin(self):
         # span was left dangling.
         if self._method == "HEAD":
             self.close()
+        else:
+            # We're not timing out, so make sure the call to
+            # HTTPConnection.close() doesn't close the span.
+            _span_contexts_by_fd[self.fp.fileno()][1] = False
 
 
-def _patched_close(self):
+def _patched_resp_close(self):
     __org_close__(self)
 
     span_ctx = getattr(self, '_zipkin_span', None)
@@ -110,7 +121,20 @@ def _patched_close(self):
         del self._zipkin_span
 
 
+def _patched_conn_close(self):
+    sock = self.sock
+    if sock:
+        span_ctx, conn_close_should_close_span = _span_contexts_by_fd.get(sock.fileno(),
+                                                                          (None, None))
+    __org_close__(self)
+
+    if api.is_tracing() and span_ctx and conn_close_should_close_span:
+        span_ctx.stop()
+        del _span_contexts_by_fd[span_ctx._fd_key]
+
+
 def patch():
     httplib.HTTPConnection.endheaders = _patched_endheaders
+    httplib.HTTPConnection.close = _patched_conn_close
     httplib.HTTPResponse.begin = _patched_begin
-    httplib.HTTPResponse.close = _patched_close
+    httplib.HTTPResponse.close = _patched_resp_close
