@@ -47,21 +47,20 @@ from eventlet.green import threading
 from py_zipkin.storage import Tracer, Stack
 from py_zipkin.encoding import Encoding
 from py_zipkin.zipkin import (
-    zipkin_span, zipkin_client_span, zipkin_server_span, create_attrs_for_span,
-    create_endpoint)
+    zipkin_span, zipkin_client_span, zipkin_server_span, create_endpoint)
 
 from swift_zipkin import transport
 
 # Convenience imports so other places don't have to import py_zipkin stuff
 from py_zipkin.zipkin import (
     create_http_headers_for_new_span,
-    create_http_headers_for_this_span,
     ZipkinAttrs,
+    extract_zipkin_attrs_from_headers,
 )
 # shut up linter
 create_http_headers_for_new_span = create_http_headers_for_new_span
-create_http_headers_for_this_span = create_http_headers_for_this_span
 ZipkinAttrs = ZipkinAttrs
+extract_zipkin_attrs_from_headers = extract_zipkin_attrs_from_headers
 
 
 sample_rate_pct = 100
@@ -87,35 +86,39 @@ class SpanSavingTracer(Tracer):
         return self._span_ctx_stack.pop()
 
 
-def _get_greenthread_local_tracer():
+def has_default_tracer():
+    """Is there a default tracer created already?
+
+    :returns: Is there a default tracer created already?
+    :rtype: boolean
     """
-    This is used to monkey-patch py_zipkins's get_default_tracer() with this
-    eventlet-thread-local-storage-aware version.
+    return hasattr(_tls, 'tracer')
+
+
+def get_default_tracer():
+    """Return the current default Tracer.
+
+    For now it'll get it from thread-local in Python 2.7 to 3.6 and from
+    contextvars since Python 3.7.
+
+    :returns: current default tracer.
+    :rtype: Tracer
     """
     if not hasattr(_tls, 'tracer'):
         _tls.tracer = SpanSavingTracer()
     return _tls.tracer
 
 
-get_tracer = _get_greenthread_local_tracer
+def set_default_tracer(tracer):
+    """Sets the current default Tracer.
 
+    For now it'll get it from thread-local in Python 2.7 to 3.6 and from
+    contextvars since Python 3.7.
 
-def _set_greenthread_local_tracer(tracer):
-    """
-    This is used to monkey-patch py_zipkins's set_default_tracer() with this
-    eventlet-thread-local-storage-aware version.
+    :returns: current default tracer.
+    :rtype: Tracer
     """
     _tls.tracer = tracer
-
-
-set_tracer = _set_greenthread_local_tracer
-
-
-def is_tracing():
-    """
-    Is a span currently "open"?
-    """
-    return hasattr(_tls, 'tracer')
 
 
 class ezipkin_span(zipkin_span):
@@ -130,25 +133,17 @@ class ezipkin_span(zipkin_span):
         kwargs.setdefault('transport_handler', transport.global_green_http_transport)
         kwargs.setdefault('use_128bit_trace_id', True)
         kwargs.setdefault('encoding', Encoding.V2_JSON)
-        self._do_context_push = kwargs.pop('do_context_push', True)
         super(ezipkin_span, self).__init__(*args, **kwargs)
 
     def start(self):
         # retval will be same as "self" but this feels a little cleaner
         retval = super(ezipkin_span, self).start()
-        if retval.do_pop_attrs and self._do_context_push:
+        if retval.do_pop_attrs:
             self.get_tracer().push_span_ctx(retval)
-        elif retval.do_pop_attrs:
-            # Parent class pushed context attrs we now need to pop
-            self.get_tracer().pop_zipkin_attrs()
-            # We also need to prevent parent class from trying to pop them back
-            # off because they won't be there:
-            self.do_pop_attrs = False
 
         return retval
 
     def stop(self, _exc_type=None, _exc_value=None, _exc_traceback=None):
-        # Any self._do_context_push was already accounted for in our start()
         if self.do_pop_attrs:
             self.get_tracer().pop_span_ctx()
         return super(ezipkin_span, self).stop(_exc_type=_exc_type,
@@ -190,7 +185,7 @@ class ezipkin_server_span(ezipkin_span, zipkin_server_span):
 # Convenience function to find the current span context instance and call this
 # method on it.
 def update_binary_annotations(extra_annotations):
-    tracer = _get_greenthread_local_tracer()
+    tracer = get_default_tracer()
     span_ctx = tracer.get_span_ctx()
     if span_ctx:
         return span_ctx.update_binary_annotations(extra_annotations)
@@ -199,47 +194,12 @@ def update_binary_annotations(extra_annotations):
 # Convenience function to find the current span context instance and call this
 # method on it.
 def add_remote_endpoint(port=0, service_name='unknown', host='127.0.0.1'):
-    tracer = _get_greenthread_local_tracer()
+    tracer = get_default_tracer()
     span_ctx = tracer.get_span_ctx()
     if span_ctx:
         return span_ctx.add_remote_endpoint(port=int(port),
                                             service_name=service_name,
                                             host=host)
-
-
-def extract_zipkin_attrs_from_headers(headers):
-    """
-    Implements extraction of B3 headers per:
-        https://github.com/openzipkin/b3-propagation
-
-    Returns a ZipkinAttrs instance or None
-    """
-    # Check our non-standard header first
-    is_shared = headers.get('X-B3-Shared', False) == '1'
-    if 'b3' in headers:
-        # b3={TraceId}-{SpanId}-{SamplingState}-{ParentSpanId}
-        # where the last two fields are optional.
-        bits = headers['b3'].split('-')
-        if len(bits) == 1 and int(bits[0]) == 0:
-            return create_attrs_for_span(sample_rate=0.0,
-                                         use_128bit_trace_id=True)
-        return ZipkinAttrs(bits[0], bits[1], bits[3:4] or None,
-                           '0', bits[2:3] and bits[2] == '1',
-                           is_shared)
-    trace_id = headers.get('X-B3-TraceId', None)
-    span_id = headers.get('X-B3-SpanId', None)
-    sampled = headers.get('X-B3-Sampled', None)
-    # Must have either both trace_id & span_id OR sampled
-    if ((trace_id and span_id) or sampled):
-        # ['trace_id', 'span_id', 'parent_span_id', 'flags', 'is_sampled',
-        #  'is_shared']
-        return ZipkinAttrs(
-            trace_id,
-            span_id,
-            headers.get('X-B3-ParentSpanId', None),
-            headers.get('X-B3-Flags', '0'),
-            sampled == '1',
-            is_shared)
 
 
 def default_service_name():
