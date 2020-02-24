@@ -42,8 +42,9 @@ from swift_zipkin import api
 
 
 __org_endheaders__ = httplib.HTTPConnection.endheaders
+__org_conn_close__ = httplib.HTTPConnection.close
 __org_begin__ = httplib.HTTPResponse.begin
-__org_close__ = httplib.HTTPResponse.close
+__org_resp_close__ = httplib.HTTPResponse.close
 
 
 # stores [span_ctx, should_close_span_in_HTTPConnection.close_flag] pairs
@@ -112,7 +113,7 @@ def _patched_begin(self):
 
 
 def _patched_resp_close(self):
-    __org_close__(self)
+    __org_resp_close__(self)
 
     span_ctx = getattr(self, '_zipkin_span', None)
     if api.has_default_tracer() and span_ctx:
@@ -123,12 +124,13 @@ def _patched_resp_close(self):
 
 def _patched_conn_close(self):
     sock = self.sock
+    span_ctx = None
     if sock:
         span_ctx, conn_close_should_close_span = _span_contexts_by_fd.get(sock.fileno(),
                                                                           (None, None))
-    __org_close__(self)
+    __org_conn_close__(self)
 
-    if api.is_tracing() and span_ctx and conn_close_should_close_span:
+    if api.has_default_tracer() and span_ctx and conn_close_should_close_span:
         span_ctx.stop()
         del _span_contexts_by_fd[span_ctx._fd_key]
 
