@@ -55,8 +55,8 @@ from swift_zipkin import transport
 from py_zipkin.zipkin import (
     create_http_headers_for_new_span,
     ZipkinAttrs,
-    extract_zipkin_attrs_from_headers,
 )
+from py_zipkin.request_helpers import extract_zipkin_attrs_from_headers
 # shut up linter
 create_http_headers_for_new_span = create_http_headers_for_new_span
 ZipkinAttrs = ZipkinAttrs
