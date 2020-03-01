@@ -47,8 +47,8 @@ __original_main__ = greenthread.GreenThread.main
 
 def _patched__init(self, parent):
     # parent thread saves current TraceData from tls to self
-    if api.is_tracing():
-        self.zipkin_tracer = api.get_tracer()
+    if api.has_default_tracer():
+        self.zipkin_tracer = api.get_default_tracer().copy()
 
     __original_init__(self, parent)
 
@@ -56,9 +56,13 @@ def _patched__init(self, parent):
 def _patched_main(self, function, args, kwargs):
     # child thread inherits TraceData
     if hasattr(self, 'zipkin_tracer'):
-        api.set_tracer(self.zipkin_tracer)
+        api.set_default_tracer(self.zipkin_tracer)
 
-    __original_main__(self, function, args, kwargs)
+    try:
+        __original_main__(self, function, args, kwargs)
+    finally:
+        if hasattr(self, 'zipkin_tracer'):
+            del self.zipkin_tracer
 
 
 def patch():

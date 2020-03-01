@@ -36,7 +36,9 @@
 #  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 #  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 #  THE SOFTWARE.
+import py_zipkin.instrumentations.python_threads
 import py_zipkin.storage
+import py_zipkin.thread_local
 
 from swift_zipkin import api, wsgi, http, greenthread, memcached, transport
 
@@ -62,10 +64,13 @@ def patch_eventlet_and_swift(logger, zipkin_host='127.0.0.1', zipkin_port=9411,
     """
     # Overwrite py_zipkin.storage get/set_default_tracer functions with our
     # greenthread-aware functions.
-    py_zipkin.storage.set_default_tracer = api._set_greenthread_local_tracer
-    py_zipkin.storage.get_default_tracer = api._get_greenthread_local_tracer
-    py_zipkin.zipkin.get_default_tracer = api._get_greenthread_local_tracer
-    py_zipkin.get_default_tracer = api._get_greenthread_local_tracer
+    py_zipkin.storage.set_default_tracer = api.set_default_tracer
+    py_zipkin.storage.get_default_tracer = api.get_default_tracer
+    py_zipkin.storage.has_default_tracer = api.has_default_tracer
+    py_zipkin.zipkin.get_default_tracer = api.get_default_tracer
+    py_zipkin.thread_local.get_default_tracer = api.get_default_tracer
+    py_zipkin.instrumentations.python_threads.get_default_tracer = api.get_default_tracer
+    py_zipkin.get_default_tracer = api.get_default_tracer
 
     # py_zipkin uses 0-100% for sample-rate, so convert here
     api.sample_rate_pct = sample_rate * 100.0

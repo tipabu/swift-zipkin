@@ -38,6 +38,7 @@
 #  THE SOFTWARE.
 import inspect
 import os
+import re
 
 from eventlet import wsgi
 
@@ -62,15 +63,8 @@ def _extract_status_code(environ, zipkin_span):
 
 
 def _patched_handle_one_response(self):
-    zipkin_attrs = api.extract_zipkin_attrs_from_headers(self.headers)
-    sample_rate = api.sample_rate_pct
-    # A client can send just `X-B3-Sampled: 0` with no trace identifiers to
-    # just say "don't trace".  In that case, we let new trace IDs get created
-    # but we clamp the sample rate to 0% to honor the client's desire.
-    if (zipkin_attrs and not (zipkin_attrs.trace_id and zipkin_attrs.span_id)
-            and zipkin_attrs.is_sampled is False):
-        zipkin_attrs = None
-        sample_rate = 0.0
+    zipkin_attrs = api.extract_zipkin_attrs_from_headers(
+        self.headers, sample_rate=api.sample_rate_pct, use_128bit_trace_id=True)
 
     binary_annotations = {
         "http.uri": self.path,
@@ -109,13 +103,21 @@ def _patched_handle_one_response(self):
         service_name=api.default_service_name(),
         span_name=self.command,
         zipkin_attrs=zipkin_attrs,
-        sample_rate=sample_rate,
+        sample_rate=None if zipkin_attrs else api.sample_rate_pct,
         host=local_ip,
         port=local_port,
         binary_annotations=binary_annotations,
     ) as zipkin_span:
-        zipkin_span.add_remote_endpoint(
-            client_port, self.headers.get('User-Agent'), client_ip)
+        # For swift servers, extract a canonical service name and PID from the
+        # User-Agent header.
+        user_agent = self.headers.get('User-Agent', 'unknown')
+        match = re.match(r'([a-zA-z]+-server) (\d+)$', user_agent)
+        if match:
+            user_agent = 'swift-' + match.group(1)
+            zipkin_span.update_binary_annotations({
+                'client.pid': int(match.group(2)),
+            })
+        zipkin_span.add_remote_endpoint(client_port, user_agent, client_ip)
         # Add in a hook to snarf out the response status
         self.environ['eventlet.posthooks'].append(
             (_extract_status_code, (zipkin_span,), {}),
