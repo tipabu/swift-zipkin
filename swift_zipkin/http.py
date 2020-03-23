@@ -42,27 +42,21 @@ from swift_zipkin import api
 
 
 __org_endheaders__ = httplib.HTTPConnection.endheaders
+__org_conn_close__ = httplib.HTTPConnection.close
 __org_begin__ = httplib.HTTPResponse.begin
-__org_close__ = httplib.HTTPResponse.close
+__org_resp_close__ = httplib.HTTPResponse.close
 
 
+# tracks fd => [span_ctx, should-stop-in-HTTPConnection.close]
 _span_contexts_by_fd = {}
 
 
 def _patched_endheaders(self):
-    if api.is_tracing():
-        # Since we know this span is going out to a remote server (that's going
-        # to share our span_id), we don't need to nor want to associate any new
-        # spans on _this_ server as children of the span we're creating here.
-        # So we override the default pushing of the created span onto the
-        # tracer's stack with "do_context_push=False".
-        # NOTE: this also means our patched begin & close CANNOT use the normal
-        # api.get_tracer().get_span_ctx() trick because the created span isn't
-        # on the tracer's stack.  Hence the _span_contexts_by_fd storage.
+    # self is a HTTPConnection
+    if api.has_default_tracer():
         span_ctx = api.ezipkin_client_span(
             api.default_service_name(), span_name=self._method,
             binary_annotations={'http.uri': self.path},
-            do_context_push=False,
         )
         span_ctx.start()
 
@@ -70,38 +64,34 @@ def _patched_endheaders(self):
         try:
             path_bits = self.path.split('/', 5)[1:]
             if path_bits[0].startswith('d') and path_bits[0][1:].isdigit():
-                aco_bits = path_bits[2:]
-                if len(aco_bits) == 1:
-                    remote_service_name = 'account-server'
-                elif len(aco_bits) == 2:
-                    remote_service_name = 'container-server'
-                elif len(aco_bits) == 3:
-                    remote_service_name = 'object-server'
+                if self.port in (6002, 6005):
+                    remote_service_name = 'swift-account-server'
+                elif self.port in (6001, 6004):
+                    remote_service_name = 'swift-container-server'
+                else:
+                    remote_service_name = 'swift-object-server'
         except Exception:
             pass
         span_ctx.add_remote_endpoint(host=self.host, port=self.port,
                                      service_name=remote_service_name)
-        tmp_stack = api.Stack()
-        tmp_stack.push(span_ctx.zipkin_attrs)
-        b3_headers = api.create_http_headers_for_this_span(
-            context_stack=tmp_stack)
-        tmp_stack.pop()
+        b3_headers = span_ctx.create_http_headers_for_my_span()
         for h, v in b3_headers.items():
             self.putheader(h, v)
 
     __org_endheaders__(self)
 
-    if api.is_tracing():
+    if api.has_default_tracer():
         span_ctx._fd_key = self.sock.fileno()
-        _span_contexts_by_fd[span_ctx._fd_key] = span_ctx
+        _span_contexts_by_fd[span_ctx._fd_key] = [span_ctx, True]
 
 
 def _patched_begin(self):
+    # self is a HTTPResponse
     __org_begin__(self)
 
-    if api.is_tracing():
-        self._zipkin_span = span_ctx = \
-            _span_contexts_by_fd[self.fp.fileno()]
+    if api.has_default_tracer():
+        span_data = _span_contexts_by_fd[self.fp.fileno()]
+        self._zipkin_span = span_ctx = span_data[0]
         span_ctx.update_binary_annotations({"http.status_code": self.status})
         span_ctx.add_annotation('Response headers received')
 
@@ -111,19 +101,39 @@ def _patched_begin(self):
         # span was left dangling.
         if self._method == "HEAD":
             self.close()
+        else:
+            # We're not timing out, so make sure the call to
+            # HTTPConnection.close() doesn't close the span.
+            span_data[1] = False
 
 
-def _patched_close(self):
-    __org_close__(self)
+def _patched_resp_close(self):
+    # self is a HTTPResponse
+    __org_resp_close__(self)
 
     span_ctx = getattr(self, '_zipkin_span', None)
-    if api.is_tracing() and span_ctx:
+    if span_ctx:
+        span_ctx.stop()
+        del self._zipkin_span
+        del _span_contexts_by_fd[span_ctx._fd_key]
+
+
+def _patched_conn_close(self):
+    # self is a HTTPConnection
+    sock = self.sock
+    span_ctx = None
+    if sock and api.has_default_tracer() and sock.fileno() in _span_contexts_by_fd:
+        span_ctx, should_stop_in_conn_close = _span_contexts_by_fd[sock.fileno()]
+
+    __org_conn_close__(self)
+
+    if span_ctx and should_stop_in_conn_close:
         span_ctx.stop()
         del _span_contexts_by_fd[span_ctx._fd_key]
-        del self._zipkin_span
 
 
 def patch():
     httplib.HTTPConnection.endheaders = _patched_endheaders
+    httplib.HTTPConnection.close = _patched_conn_close
     httplib.HTTPResponse.begin = _patched_begin
-    httplib.HTTPResponse.close = _patched_close
+    httplib.HTTPResponse.close = _patched_resp_close

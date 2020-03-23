@@ -50,6 +50,9 @@ setuptools.setup(
     author_email='darrell@swiftstack.com',
     url='https://swiftstack.com',
     packages=['swift_zipkin'],
+    install_requires=[
+        'py_zipkin>0.19.0',
+    ],
     classifiers=['Development Status :: 4 - Beta',
                  'Operating System :: POSIX :: Linux',
                  'Programming Language :: Python :: 2.7',
